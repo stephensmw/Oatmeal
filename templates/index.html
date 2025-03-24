@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MUSH Client</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Socket.IO -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="app-title">
+                <button id="sidebar-toggle" class="sidebar-toggle" title="Toggle sidebar">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <h1>Oatmeal MUSH Client</h1>
+            </div>
+            <div class="connection-status">
+                <span id="status-indicator" class="status-indicator disconnected"></span>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <div class="connection-panel">
+                    <h3>Connection</h3>
+                    <div class="form-group">
+                        <label for="server-host">Host:</label>
+                        <input type="text" id="server-host" placeholder="host.example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="server-port">Port:</label>
+                        <input type="number" id="server-port" placeholder="4201">
+                    </div>
+                    <div class="form-group">
+                        <label for="connection-name">Save as:</label>
+                        <input type="text" id="connection-name" placeholder="Connection name">
+                    </div>
+                    <div class="button-group">
+                        <button id="connect-button" class="primary-button">Connect</button>
+                        <button id="disconnect-button" class="secondary-button" disabled>Disconnect</button>
+                        <button id="save-connection-button" class="secondary-button">Save</button>
+                    </div>
+                </div>
+                
+                <div class="saved-connections-panel">
+                    <h3>Saved Connections</h3>
+                    <div id="saved-connections-list" class="saved-connections-list">
+                        <!-- Saved connections will be inserted here -->
+                        <div class="empty-list-message">No saved connections</div>
+                    </div>
+                </div>
+
+                <div class="logging-panel">
+                    <h3>Session Logging</h3>
+                    <div class="form-group">
+                        <label for="log-filename">Log Filename:</label>
+                        <input type="text" id="log-filename" placeholder="Leave empty for auto-generated name">
+                    </div>
+                    <div class="form-group">
+                        <label for="auto-log">Auto-log on connect:</label>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="auto-log">
+                            <span class="toggle-slider"></span>
+                        </div>
+                    </div>
+                    <div class="button-group">
+                        <button id="start-logging-button" class="secondary-button">Start Logging</button>
+                        <button id="stop-logging-button" class="secondary-button" disabled>Stop Logging</button>
+                    </div>
+                </div>
+
+                <div class="settings-panel">
+                    <h3>Settings</h3>
+                    <div class="form-group">
+                        <label for="font-size">Font Size:</label>
+                        <select id="font-size">
+                            <option value="12">12px</option>
+                            <option value="14" selected>14px</option>
+                            <option value="16">16px</option>
+                            <option value="18">18px</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="ansi-colors">ANSI Colors:</label>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="ansi-colors" checked>
+                            <span class="toggle-slider"></span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="pueblo-support">Pueblo Support:</label>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="pueblo-support" checked>
+                            <span class="toggle-slider"></span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="spellcheck">Spellcheck:</label>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="spellcheck" checked>
+                            <span class="toggle-slider"></span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="auto-reconnect">Auto-reconnect:</label>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="auto-reconnect" checked>
+                            <span class="toggle-slider"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="terminal-container">
+                <div id="terminal-output" class="terminal-output"></div>
+                <div class="input-container">
+                    <textarea id="command-input" placeholder="Enter command... (Press Shift+Enter for a new line)" rows="5" maxlength="131072" disabled></textarea>
+                    <div class="input-buttons">
+                        <button id="clear-button" title="Clear terminal"><i class="fas fa-trash"></i></button>
+                        <button id="history-button" title="View command history"><i class="fas fa-history"></i></button>
+                        <button id="send-button" title="Send command" disabled><i class="fas fa-paper-plane"></i></button>
+                    </div>
+                </div>
+                
+                <!-- Command History Modal -->
+                <div id="history-modal" class="modal hidden">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3>Command History</h3>
+                            <button id="close-history-modal"><i class="fas fa-times"></i></button>
+                        </div>
+                        <div class="modal-body">
+                            <div id="command-history-list" class="command-history-list">
+                                <!-- Command history will be inserted here -->
+                                <div class="empty-list-message">No command history</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="notification" class="notification hidden">
+            <span id="notification-message"></span>
+            <button id="close-notification"><i class="fas fa-times"></i></button>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/mush_formatter.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/client.js') }}"></script>
+</body>
+</html>

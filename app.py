@@ -8,6 +8,194 @@ import re
 import datetime
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit, disconnect
+# Modify to support multiple connections per client
+mush_connections = {}
+
+class MushConnection:
+    def __init__(self, host, port, client_id, world_id):
+        self.host = host
+        self.port = port
+        self.client_id = client_id
+        self.world_id = world_id  # Unique identifier for this world
+        self.socket = None
+        self.connected = False
+        self.reader_thread = None
+        self.stop_thread = False
+        self.command_history = []
+        self.max_history = 100
+        self.session_log = None
+        self.is_logging = False
+        self.log_filename = None
+        self.autolog = False
+        self.unread_messages = 0  # Track unread messages
+
+    # ... [existing methods remain the same]
+
+    def read_from_server(self):
+        """Reads data from the MUSH server and sends it to the client via WebSocket"""
+        buffer = bytearray()
+        
+        while not self.stop_thread and self.connected:
+            try:
+                # Read data from socket
+                data = self.socket.recv(4096)
+                if not data:
+                    # Connection closed by server
+                    socketio.emit('server_disconnect', {
+                        'message': 'Server closed the connection', 
+                        'world_id': self.world_id
+                    }, room=self.client_id)
+                    self.connected = False
+                    break
+                
+                # Add to buffer
+                buffer.extend(data)
+                
+                # Process complete lines
+                while b'\n' in buffer:
+                    line, buffer = buffer.split(b'\n', 1)
+                    try:
+                        text = line.decode('utf-8')
+                        # Increment unread messages
+                        self.unread_messages += 1
+                        
+                        # Emit the received text to the client
+                        socketio.emit('server_message', {
+                            'text': text, 
+                            'world_id': self.world_id,
+                            'unread_messages': self.unread_messages
+                        }, room=self.client_id)
+                        
+                        # Log server message if logging is enabled
+                        if self.is_logging:
+                            self.log_data(text)
+                    except UnicodeDecodeError:
+                        # Handle encoding issues
+                        try:
+                            text = line.decode('latin-1')
+                            self.unread_messages += 1
+                            socketio.emit('server_message', {
+                                'text': text, 
+                                'world_id': self.world_id,
+                                'unread_messages': self.unread_messages
+                            }, room=self.client_id)
+                            
+                            # Log server message if logging is enabled
+                            if self.is_logging:
+                                self.log_data(text)
+                        except:
+                            logger.error("Failed to decode message from server")
+            
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if not self.stop_thread:  # Only log if not intentionally stopping
+                    logger.error(f"Error reading from server: {str(e)}")
+                    # Send connection_lost event with connection info for auto-reconnect
+                    socketio.emit('connection_lost', {
+                        'error': str(e),
+                        'host': self.host,
+                        'port': self.port,
+                        'world_id': self.world_id
+                    }, room=self.client_id)
+                self.connected = False
+                break
+
+# Modify existing socket event handlers to support multiple connections
+@socketio.on('connect_to_server')
+def connect_to_server(data):
+    client_id = request.sid
+    host = data.get('host')
+    port = data.get('port')
+    world_id = data.get('world_id')  # New parameter to identify the world
+    auto_log = data.get('auto_log', False)
+    log_filename = data.get('log_filename')
+    
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        emit('connection_error', {'error': 'Invalid port number'})
+        return
+    
+    # Create a new connection with world_id
+    connection = MushConnection(host, port, client_id, world_id)
+    
+    # Set autolog flag if provided
+    if auto_log:
+        connection.autolog = True
+    
+    # Initialize connections dict for this client if not exists
+    if client_id not in mush_connections:
+        mush_connections[client_id] = {}
+    
+    # Try to connect
+    if connection.connect():
+        # Store connection with world_id as key
+        mush_connections[client_id][world_id] = connection
+        
+        # Start logging automatically if auto_log is enabled
+        if auto_log:
+            success, message = connection.start_logging(log_filename)
+            if success:
+                emit('logging_started', {
+                    'filename': message, 
+                    'auto_log': True, 
+                    'world_id': world_id
+                })
+                logger.info(f"Auto-logging started for {client_id} to {message}")
+            else:
+                logger.error(f"Failed to start auto-logging: {message}")
+        
+        emit('server_connected', {
+            'host': host, 
+            'port': port, 
+            'world_id': world_id
+        })
+    else:
+        emit('connection_error', {
+            'error': f'Failed to connect to {host}:{port}', 
+            'world_id': world_id
+        })
+
+@socketio.on('disconnect_from_server')
+def disconnect_from_server(data):
+    client_id = request.sid
+    world_id = data.get('world_id')
+    
+    if client_id in mush_connections and world_id in mush_connections[client_id]:
+        mush_connections[client_id][world_id].disconnect()
+        del mush_connections[client_id][world_id]
+        emit('server_disconnected', {'world_id': world_id})
+    else:
+        emit('connection_error', {'error': 'Not connected to specified server'})
+
+@socketio.on('send_command')
+def send_command(data):
+    client_id = request.sid
+    command = data.get('command', '').strip()
+    world_id = data.get('world_id')
+    
+    if not client_id in mush_connections or world_id not in mush_connections[client_id]:
+        emit('connection_error', {'error': 'Not connected to any server'})
+        return
+    
+    connection = mush_connections[client_id][world_id]
+    
+    if not connection.connected:
+        emit('connection_error', {'error': 'Connection lost, please reconnect'})
+        return
+    
+    if not connection.send_command(command):
+        emit('connection_error', {'error': 'Failed to send command'})
+
+@socketio.on('mark_messages_read')
+def mark_messages_read(data):
+    client_id = request.sid
+    world_id = data.get('world_id')
+    
+    if client_id in mush_connections and world_id in mush_connections[client_id]:
+        mush_connections[client_id][world_id].unread_messages = 0
+        emit('messages_marked_read', {'world_id': world_id})
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
